@@ -1,1 +1,134 @@
-{"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}], "config": {"theme": "dark", "version": 1.2}}
+{
+  "users": [
+    { 
+      "id": 1,
+      "name": "Alice Johnson",
+      "age": 30,
+      "active": true,
+      "balance": 1234.56,
+      "tags": ["admin", "premium", "verified"],
+      "metadata": {
+        "lastLogin": "2024-01-15T10:30:00Z",
+        "preferences": {
+          "theme": "dark",
+          "notifications": {
+            "email": true,
+            "push": false,
+            "sms": null
+          },
+          "language": "en-US"
+        },
+        "scores": [95, 87, 92, null, 88]
+      },
+      "address": null
+    },
+    { 
+      "id": 2,
+      "name": "Bob Smith",
+      "age": 25,
+      "active": false,
+      "balance": -45.23,
+      "tags": [],
+      "metadata": {
+        "lastLogin": null,
+        "preferences": {
+          "theme": "light",
+          "notifications": {
+            "email": false,
+            "push": true
+          },
+          "language": "es-MX"
+        },
+        "scores": [72, 68, 75, 81]
+      },
+      "address": {
+        "street": "123 Main St",
+        "city": "New York",
+        "coordinates": {
+          "lat": 40.7128,
+          "lng": -74.0060
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Charlie Davis",
+      "age": 45,
+      "active": true,
+      "balance": 0,
+      "tags": ["beta", "developer"],
+      "metadata": {
+        "lastLogin": "2024-12-01T15:45:30Z",
+        "preferences": {},
+        "scores": []
+      }
+    }
+  ],
+  "config": {
+    "version": 2.1,
+    "features": {
+      "darkMode": true,
+      "analytics": false,
+      "experimental": {
+        "newUI": true,
+        "aiAssistant": false,
+        "flags": ["feature_x", "feature_y"]
+      }
+    },
+    "limits": {
+      "maxUsers": 1000,
+      "maxFileSize": 5242880,
+      "rateLimits": {
+        "requests": 100,
+        "window": "1h"
+      }
+    }
+  },
+  "emptyData": {
+    "emptyArray": [],
+    "emptyObject": {},
+    "nullValue": null,
+    "undefinedLike": null,
+    "booleans": {
+      "yes": true,
+      "no": false
+    }
+  },
+  "specialChars": {
+    "unicode": "Hello 世界 🌍",
+    "escaped": "Line 1\nLine 2\tTabbed",
+    "quotes": "She said \"hello\"",
+    "path": "/usr/local/bin",
+    "regex": "^[a-zA-Z0-9]+$"
+  },
+  "numbers": {
+    "integer": 42,
+    "negative": -17,
+    "float": 3.14159,
+    "scientific": 1.23e-4,
+    "zero": 0,
+    "infinity": 999999999999
+  },
+  "deeply": {
+    "nested": {
+      "structure": {
+        "level4": {
+          "level5": {
+            "level6": {
+              "value": "deep",
+              "array": [
+                {
+                  "item": 1,
+                  "subitems": [
+                    {"id": "a", "val": 10},
+                    {"id": "b", "val": 20}
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -92,7 +92,7 @@ function filterObject(obj: any, condition: string): any {
 // Tool 1: JSON Read - Basic file reading with optional filtering
 server.tool(
   "json_read",
-  "Read and parse a JSON file with optional filtering and depth control",
+  "Read JSON files with optional depth limits and sampling. Use for exploring large JSON structures or getting an overview.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     max_depth: z.number().optional().describe("Maximum depth to traverse (default: unlimited)"),
@@ -137,7 +137,7 @@ server.tool(
 // Tool 2: JSON Stats - Analyze structure and size
 server.tool(
   "json_stats",
-  "Analyze JSON file structure, size, and statistics",
+  "Get file size, structure analysis, and depth statistics. Use to understand JSON complexity before processing.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     include_sample: z.boolean().optional().describe("Include sample data structure"),
@@ -184,15 +184,28 @@ server.tool(
       const stats = getStats(data);
       const fileContent = readFileSync(resolve(file_path), 'utf8');
       
-      const result = {
-        fileSize: `${(fileContent.length / 1024).toFixed(2)} KB`,
-        structure: stats,
-        totalNodes: JSON.stringify(data).length,
-        ...stats
-      };
+      const fileSize = (fileContent.length / 1024).toFixed(2);
+      const nodeCount = JSON.stringify(data).length;
+      
+      let markdown = `# JSON File Statistics\n\n`;
+      markdown += `**File Size:** ${fileSize} KB\n`;
+      markdown += `**Total Nodes:** ${nodeCount.toLocaleString()}\n`;
+      markdown += `**Type:** ${stats.type}\n`;
+      
+      if (stats.type === 'array') {
+        markdown += `**Length:** ${stats.length}\n`;
+        markdown += `**Element Types:** ${stats.elementTypes.join(', ')}\n`;
+      } else if (stats.type === 'object') {
+        markdown += `**Key Count:** ${stats.keyCount}\n`;
+        markdown += `**Top Keys:** ${stats.keys.join(', ')}\n`;
+      }
+      
+      if (include_sample && stats.sample) {
+        markdown += `\n## Sample Structure\n\`\`\`json\n${JSON.stringify(stats.sample, null, 2)}\n\`\`\`\n`;
+      }
       
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: markdown }],
       };
     } catch (error: any) {
       return {
@@ -205,7 +218,7 @@ server.tool(
 // Tool 3: JSON Query - JSONPath-like queries
 server.tool(
   "json_query",
-  "Query JSON data using dot notation paths (e.g., 'users.0.name', 'data.items')",
+  "Extract values using dot notation paths like 'users.0.name'. Use for precise data extraction.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     query_path: z.string().describe("Dot notation path to query (e.g., 'users.0.name')"),
@@ -221,11 +234,9 @@ server.tool(
       return {
         content: [{ 
           type: "text", 
-          text: JSON.stringify({
-            query: query_path,
-            found: result !== undefined,
-            result: output
-          }, null, 2) 
+          text: result !== undefined 
+            ? `✓ Found at path: ${query_path}\n\nValue:\n${JSON.stringify(output, null, 2)}`
+            : `✗ Path not found: ${query_path}\n\nDefault: ${JSON.stringify(output, null, 2)}`
         }],
       };
     } catch (error: any) {
@@ -239,7 +250,7 @@ server.tool(
 // Tool 4: JSON Slice - Extract specific ranges or keys
 server.tool(
   "json_slice",
-  "Extract specific array ranges or object keys from JSON data",
+  "Extract array ranges or specific object keys. Use to get subsets of data.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     path: z.string().optional().describe("Dot notation path to the target (default: root)"),
@@ -280,7 +291,7 @@ server.tool(
 // Tool 5: JSON Filter - Filter arrays or objects by conditions
 server.tool(
   "json_filter",
-  "Filter JSON arrays or objects based on JavaScript conditions",
+  "Filter arrays/objects with JS conditions like 'item.age > 18'. Use for conditional data extraction.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     path: z.string().optional().describe("Dot notation path to the target array/object"),
@@ -307,7 +318,7 @@ server.tool(
 // Tool 6: JSON Search - Search for keys/values matching patterns
 server.tool(
   "json_search",
-  "Search for keys or values matching patterns in JSON data",
+  "Find keys or values matching regex patterns. Use to locate specific data across the entire structure.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     search_type: z.enum(["key", "value", "both"]).describe("What to search for"),
@@ -349,15 +360,28 @@ server.tool(
       
       searchObject(data);
       
+      let markdown = `# Search Results\n\n`;
+      markdown += `**Pattern:** \`${pattern}\`\n`;
+      markdown += `**Matches Found:** ${results.length}\n`;
+      markdown += `**Search Type:** ${search_type}\n\n`;
+      
+      if (results.length > 0) {
+        markdown += `## Matches\n\n`;
+        results.slice(0, maxRes).forEach((match, idx) => {
+          markdown += `${idx + 1}. **${match.type}** at \`${match.path}\`\n`;
+          markdown += `   - Key: \`${match.key}\`\n`;
+          markdown += `   - Value: \`${JSON.stringify(match.value)}\`\n\n`;
+        });
+        
+        if (results.length > maxRes) {
+          markdown += `\n*...and ${results.length - maxRes} more results*\n`;
+        }
+      } else {
+        markdown += `*No matches found*\n`;
+      }
+      
       return {
-        content: [{ 
-          type: "text", 
-          text: JSON.stringify({
-            pattern,
-            totalFound: results.length,
-            results: results.slice(0, maxRes)
-          }, null, 2) 
-        }],
+        content: [{ type: "text", text: markdown }],
       };
     } catch (error: any) {
       return {
@@ -370,7 +394,7 @@ server.tool(
 // Tool 7: JSON Transform - Apply transformations to JSON data
 server.tool(
   "json_transform",
-  "Transform JSON data using JavaScript expressions",
+  "Map, reduce, or sort arrays using JS expressions. Use for data transformation and aggregation.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     path: z.string().optional().describe("Dot notation path to the target"),
@@ -419,7 +443,7 @@ server.tool(
 // Tool 8: JSON Validate - Basic validation and structure checking
 server.tool(
   "json_validate",
-  "Validate JSON file and check for common issues",
+  "Check for deep nesting, empty structures, and file validity. Use before processing unknown JSON.",
   {
     file_path: z.string().describe("Path to the JSON file"),
     check_duplicates: z.boolean().optional().describe("Check for duplicate keys in objects"),
@@ -470,25 +494,31 @@ server.tool(
       
       validateObject(data);
       
-      const result = {
-        valid: true,
-        fileSize: `${(content.length / 1024).toFixed(2)} KB`,
-        maxDepth,
-        totalIssues: issues.length,
-        issues: issues.length > 0 ? issues : ['No issues found'],
-      };
+      const fileSize = (content.length / 1024).toFixed(2);
+      
+      let markdown = `# JSON Validation Report\n\n`;
+      markdown += `✓ **Valid JSON**\n\n`;
+      markdown += `**File Size:** ${fileSize} KB\n`;
+      markdown += `**Max Depth:** ${maxDepth}\n`;
+      markdown += `**Issues Found:** ${issues.length}\n\n`;
+      
+      if (issues.length > 0) {
+        markdown += `## Issues\n\n`;
+        issues.forEach((issue, idx) => {
+          markdown += `${idx + 1}. ${issue}\n`;
+        });
+      } else {
+        markdown += `✓ No issues found\n`;
+      }
       
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: markdown }],
       };
     } catch (error: any) {
       return {
         content: [{ 
           type: "text", 
-          text: JSON.stringify({
-            valid: false,
-            error: error.message
-          }, null, 2) 
+          text: `# JSON Validation Report\n\n✗ **Invalid JSON**\n\n**Error:** ${error.message}\n`
         }],
       };
     }
