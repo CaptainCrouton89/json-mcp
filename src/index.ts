@@ -70,14 +70,16 @@ function analyzeJSONStructure(obj: any, maxDepth: number = 3, currentDepth: numb
 
 function filterObject(obj: any, condition: string): any {
   try {
-    const conditionFn = new Function('item', 'key', 'index', `return ${condition}`);
+    // For arrays: item, index are available
+    // For objects: value, key, index are available
+    const conditionFn = new Function('item', 'key', 'index', 'value', `return ${condition}`);
     
     if (Array.isArray(obj)) {
-      return obj.filter((item, index) => conditionFn(item, index, index));
+      return obj.filter((item, index) => conditionFn(item, index, index, item));
     } else if (typeof obj === 'object' && obj !== null) {
       const result: any = {};
       Object.entries(obj).forEach(([key, value], index) => {
-        if (conditionFn(value, key, index)) {
+        if (conditionFn(value, key, index, value)) {
           result[key] = value;
         }
       });
@@ -231,13 +233,12 @@ server.tool(
       
       const output = result !== undefined ? result : (default_value !== undefined ? default_value : null);
       
+      let markdown = result !== undefined 
+        ? `✓ **Found at path:** \`${query_path}\`\n\n**Value:**\n\`\`\`json\n${JSON.stringify(output, null, 2)}\n\`\`\`\n`
+        : `✗ **Path not found:** \`${query_path}\`\n\n**Default value returned:**\n\`\`\`json\n${JSON.stringify(output, null, 2)}\n\`\`\`\n`;
+      
       return {
-        content: [{ 
-          type: "text", 
-          text: result !== undefined 
-            ? `✓ Found at path: ${query_path}\n\nValue:\n${JSON.stringify(output, null, 2)}`
-            : `✗ Path not found: ${query_path}\n\nDefault: ${JSON.stringify(output, null, 2)}`
-        }],
+        content: [{ type: "text", text: markdown }],
       };
     } catch (error: any) {
       return {
@@ -349,8 +350,17 @@ server.tool(
               results.push({ type: 'key', path: newPath, key, value });
             }
             
-            if ((search_type === 'value' || search_type === 'both') && typeof value === 'string' && regex.test(value)) {
-              results.push({ type: 'value', path: newPath, key, value });
+            if ((search_type === 'value' || search_type === 'both')) {
+              // Handle null values specially
+              if (value === null && pattern === 'null') {
+                results.push({ type: 'value', path: newPath, key, value });
+              } else if (typeof value === 'string' && regex.test(value)) {
+                results.push({ type: 'value', path: newPath, key, value });
+              } else if (typeof value === 'number' && regex.test(value.toString())) {
+                results.push({ type: 'value', path: newPath, key, value });
+              } else if (typeof value === 'boolean' && regex.test(value.toString())) {
+                results.push({ type: 'value', path: newPath, key, value });
+              }
             }
             
             searchObject(value, newPath);
@@ -406,8 +416,14 @@ server.tool(
       const data = readJSONFile(file_path);
       let target = path ? getValueByPath(data, path) : data;
       
-      if (!Array.isArray(target) && transform_type !== 'reduce') {
-        throw new Error("Transform target must be an array for map/sort operations");
+      if (!Array.isArray(target)) {
+        if (transform_type === 'map' || transform_type === 'sort') {
+          throw new Error(`Transform target must be an array for ${transform_type} operations. Got ${typeof target}${typeof target === 'object' ? ' (object)' : ''}`);
+        }
+        // For reduce on objects, convert to entries array
+        if (transform_type === 'reduce' && typeof target === 'object' && target !== null) {
+          target = Object.entries(target);
+        }
       }
       
       let result: any;
@@ -419,7 +435,9 @@ server.tool(
           break;
         case 'reduce':
           const reduceFn = new Function('acc', 'item', 'index', 'array', `return ${expression}`);
-          result = Array.isArray(target) ? target.reduce(reduceFn as any, {}) : reduceFn({}, target, 0, [target]);
+          // For reduce, use 0 as initial value for numeric operations, empty object for object operations
+          const initialValue = expression.includes('+') || expression.includes('-') || expression.includes('*') || expression.includes('/') ? 0 : {};
+          result = Array.isArray(target) ? target.reduce(reduceFn as any, initialValue) : reduceFn(initialValue, target, 0, [target]);
           break;
         case 'sort':
           const sortFn = new Function('a', 'b', `return ${expression}`);
