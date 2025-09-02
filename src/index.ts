@@ -75,7 +75,7 @@ function filterObject(obj: any, condition: string): any {
     const conditionFn = new Function('item', 'key', 'index', 'value', `return ${condition}`);
     
     if (Array.isArray(obj)) {
-      return obj.filter((item, index) => conditionFn(item, index, index, item));
+      return obj.filter((item, index) => conditionFn(item, undefined, index, item));
     } else if (typeof obj === 'object' && obj !== null) {
       const result: any = {};
       Object.entries(obj).forEach(([key, value], index) => {
@@ -91,39 +91,73 @@ function filterObject(obj: any, condition: string): any {
   }
 }
 
-// Tool 1: JSON Read - Basic file reading with optional filtering
+// Tool 1: JSON Read - Read and analyze JSON files with flexible output
 server.tool(
   "json_read",
-  "Read JSON files with optional depth limits and sampling. Use for exploring large JSON structures or getting an overview.",
+  "Read and analyze JSON files with flexible output options",
   {
     file_path: z.string().describe("Path to the JSON file"),
-    max_depth: z.number().optional().describe("Maximum depth to traverse (default: unlimited)"),
-    keys_only: z.boolean().optional().describe("Return only keys at each level"),
-    include_types: z.boolean().optional().describe("Include type information"),
-    sample_arrays: z.number().optional().describe("For arrays, show only first N items (default: all)"),
+    path: z.string().optional().describe("Dot notation to specific location"),
+    max_depth: z.number().optional().describe("Limit traversal depth"),
+    sample_arrays: z.number().optional().describe("Show only first N array items"),
+    keys_only: z.boolean().optional().describe("Return only the key structure"),
+    include_types: z.boolean().optional().describe("Add type information"),
+    include_stats: z.boolean().optional().describe("Add file size and structure statistics"),
   },
-  async ({ file_path, max_depth, keys_only, include_types, sample_arrays }) => {
+  async ({ file_path, path, max_depth, sample_arrays, keys_only, include_types, include_stats }) => {
     try {
       const data = readJSONFile(file_path);
+      const target = path ? getValueByPath(data, path) : data;
       
       let result: any;
       
       if (keys_only) {
-        result = analyzeJSONStructure(data, max_depth || 2);
-      } else if (max_depth !== undefined || sample_arrays !== undefined) {
-        result = JSON.parse(JSON.stringify(data, (key, value) => {
+        result = analyzeJSONStructure(target, max_depth || 3);
+      } else if (sample_arrays !== undefined) {
+        result = JSON.parse(JSON.stringify(target, (key, value) => {
           if (Array.isArray(value) && sample_arrays) {
             return value.slice(0, sample_arrays);
           }
           return value;
         }));
       } else {
-        result = data;
+        result = target;
       }
       
-      const output = include_types 
-        ? { data: result, type: typeof data, isArray: Array.isArray(data) }
-        : result;
+      // Build output with optional metadata
+      let output: any = result;
+      
+      if (include_types || include_stats) {
+        output = {
+          data: result
+        };
+        
+        if (include_types) {
+          output.type = typeof target;
+          output.isArray = Array.isArray(target);
+        }
+        
+        if (include_stats) {
+          const fileContent = readFileSync(resolve(file_path), 'utf8');
+          const fileSize = (fileContent.length / 1024).toFixed(2);
+          const nodeCount = JSON.stringify(data).length;
+          
+          output.stats = {
+            fileSizeKB: fileSize,
+            totalNodes: nodeCount,
+            rootType: Array.isArray(data) ? 'array' : typeof data
+          };
+          
+          if (Array.isArray(target)) {
+            output.stats.arrayLength = target.length;
+            output.stats.elementTypes = [...new Set(target.map(item => typeof item))];
+          } else if (typeof target === 'object' && target !== null) {
+            const keys = Object.keys(target);
+            output.stats.keyCount = keys.length;
+            output.stats.topKeys = keys.slice(0, 10);
+          }
+        }
+      }
       
       return {
         content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
@@ -136,146 +170,102 @@ server.tool(
   }
 );
 
-// Tool 2: JSON Stats - Analyze structure and size
+// Tool 2: JSON Extract - Extract specific data using various methods
 server.tool(
-  "json_stats",
-  "Get file size, structure analysis, and depth statistics. Use to understand JSON complexity before processing.",
+  "json_extract",
+  "Extract specific data using paths, filters, patterns, or slices",
   {
     file_path: z.string().describe("Path to the JSON file"),
-    include_sample: z.boolean().optional().describe("Include sample data structure"),
+    path: z.string().optional().describe("Dot notation path to target"),
+    filter: z.string().optional().describe("JS condition to filter results (e.g., 'item.age > 18')"),
+    pattern: z.string().optional().describe("Regex pattern to search for"),
+    search_type: z.enum(["key", "value", "both"]).optional().describe("What to search when using pattern"),
+    start: z.number().optional().describe("Array slice start index"),
+    end: z.number().optional().describe("Array slice end index"),
+    keys: z.array(z.string()).optional().describe("Specific object keys to extract"),
+    default_value: z.any().optional().describe("Fallback if path not found"),
   },
-  async ({ file_path, include_sample }) => {
-    try {
-      const data = readJSONFile(file_path);
-      
-      function getStats(obj: any, path: string = "root"): any {
-        if (obj === null || obj === undefined) {
-          return { type: typeof obj, path, size: 0 };
-        }
-        
-        if (typeof obj !== 'object') {
-          return { type: typeof obj, path, size: 1 };
-        }
-        
-        if (Array.isArray(obj)) {
-          return {
-            type: 'array',
-            path,
-            length: obj.length,
-            size: obj.length,
-            elementTypes: [...new Set(obj.map(item => typeof item))],
-            sample: include_sample ? obj.slice(0, 2) : undefined
-          };
-        }
-        
-        const keys = Object.keys(obj);
-        return {
-          type: 'object',
-          path,
-          keyCount: keys.length,
-          size: keys.length,
-          keys: keys.slice(0, 10),
-          keyTypes: keys.reduce((acc, key) => {
-            acc[key] = typeof obj[key];
-            return acc;
-          }, {} as Record<string, string>),
-          sample: include_sample ? analyzeJSONStructure(obj, 1) : undefined
-        };
-      }
-      
-      const stats = getStats(data);
-      const fileContent = readFileSync(resolve(file_path), 'utf8');
-      
-      const fileSize = (fileContent.length / 1024).toFixed(2);
-      const nodeCount = JSON.stringify(data).length;
-      
-      let markdown = `# JSON File Statistics\n\n`;
-      markdown += `**File Size:** ${fileSize} KB\n`;
-      markdown += `**Total Nodes:** ${nodeCount.toLocaleString()}\n`;
-      markdown += `**Type:** ${stats.type}\n`;
-      
-      if (stats.type === 'array') {
-        markdown += `**Length:** ${stats.length}\n`;
-        markdown += `**Element Types:** ${stats.elementTypes.join(', ')}\n`;
-      } else if (stats.type === 'object') {
-        markdown += `**Key Count:** ${stats.keyCount}\n`;
-        markdown += `**Top Keys:** ${stats.keys.join(', ')}\n`;
-      }
-      
-      if (include_sample && stats.sample) {
-        markdown += `\n## Sample Structure\n\`\`\`json\n${JSON.stringify(stats.sample, null, 2)}\n\`\`\`\n`;
-      }
-      
-      return {
-        content: [{ type: "text", text: markdown }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Error: ${error.message}` }],
-      };
-    }
-  }
-);
-
-// Tool 3: JSON Query - JSONPath-like queries
-server.tool(
-  "json_query",
-  "Extract values using dot notation paths like 'users.0.name'. Use for precise data extraction.",
-  {
-    file_path: z.string().describe("Path to the JSON file"),
-    query_path: z.string().describe("Dot notation path to query (e.g., 'users.0.name')"),
-    default_value: z.any().optional().describe("Default value if path not found"),
-  },
-  async ({ file_path, query_path, default_value }) => {
-    try {
-      const data = readJSONFile(file_path);
-      const result = getValueByPath(data, query_path);
-      
-      const output = result !== undefined ? result : (default_value !== undefined ? default_value : null);
-      
-      let markdown = result !== undefined 
-        ? `✓ **Found at path:** \`${query_path}\`\n\n**Value:**\n\`\`\`json\n${JSON.stringify(output, null, 2)}\n\`\`\`\n`
-        : `✗ **Path not found:** \`${query_path}\`\n\n**Default value returned:**\n\`\`\`json\n${JSON.stringify(output, null, 2)}\n\`\`\`\n`;
-      
-      return {
-        content: [{ type: "text", text: markdown }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Error: ${error.message}` }],
-      };
-    }
-  }
-);
-
-// Tool 4: JSON Slice - Extract specific ranges or keys
-server.tool(
-  "json_slice",
-  "Extract array ranges or specific object keys. Use to get subsets of data.",
-  {
-    file_path: z.string().describe("Path to the JSON file"),
-    path: z.string().optional().describe("Dot notation path to the target (default: root)"),
-    start: z.number().optional().describe("Start index for arrays"),
-    end: z.number().optional().describe("End index for arrays"),
-    keys: z.array(z.string()).optional().describe("Specific keys to extract from objects"),
-  },
-  async ({ file_path, path, start, end, keys }) => {
+  async ({ file_path, path, filter, pattern, search_type, start, end, keys, default_value }) => {
     try {
       const data = readJSONFile(file_path);
       let target = path ? getValueByPath(data, path) : data;
       
-      if (Array.isArray(target)) {
+      // If path was specified but not found, return default value
+      if (path && target === undefined) {
+        const output = default_value !== undefined ? default_value : null;
+        return {
+          content: [{ 
+            type: "text", 
+            text: JSON.stringify({
+              result: output,
+              message: `Path not found: ${path}, returning default value`
+            }, null, 2) 
+          }],
+        };
+      }
+      
+      // Apply filter if specified
+      if (filter) {
+        target = filterObject(target, filter);
+      }
+      
+      // Apply pattern search if specified
+      if (pattern) {
+        const results: any[] = [];
+        const flags = 'gi'; // Case-insensitive by default
+        const regex = new RegExp(pattern, flags);
+        const searchFor = search_type || 'both';
+        
+        function searchObject(obj: any, currentPath: string = ""): void {
+          if (Array.isArray(obj)) {
+            obj.forEach((item, index) => {
+              searchObject(item, `${currentPath}[${index}]`);
+            });
+          } else if (typeof obj === 'object' && obj !== null) {
+            Object.entries(obj).forEach(([key, value]) => {
+              const newPath = currentPath ? `${currentPath}.${key}` : key;
+              
+              if ((searchFor === 'key' || searchFor === 'both') && regex.test(key)) {
+                results.push({ type: 'key', path: newPath, key, value });
+              }
+              
+              if ((searchFor === 'value' || searchFor === 'both')) {
+                if (value === null && pattern === 'null') {
+                  results.push({ type: 'value', path: newPath, key, value });
+                } else if (typeof value === 'string' && regex.test(value)) {
+                  results.push({ type: 'value', path: newPath, key, value });
+                } else if (typeof value === 'number' && regex.test(value.toString())) {
+                  results.push({ type: 'value', path: newPath, key, value });
+                } else if (typeof value === 'boolean' && regex.test(value.toString())) {
+                  results.push({ type: 'value', path: newPath, key, value });
+                }
+              }
+              
+              searchObject(value, newPath);
+            });
+          }
+        }
+        
+        searchObject(target);
+        target = results;
+      }
+      
+      // Apply slicing if specified
+      if ((start !== undefined || end !== undefined) && Array.isArray(target)) {
         const sliceStart = start || 0;
         const sliceEnd = end || target.length;
         target = target.slice(sliceStart, sliceEnd);
-      } else if (typeof target === 'object' && target !== null && keys) {
-        const result: any = {};
+      }
+      
+      // Extract specific keys if specified
+      if (keys && typeof target === 'object' && target !== null && !Array.isArray(target)) {
+        const extracted: any = {};
         keys.forEach(key => {
           if (key in target) {
-            result[key] = target[key];
+            extracted[key] = target[key];
           }
         });
-        target = result;
+        target = extracted;
       }
       
       return {
@@ -284,260 +274,6 @@ server.tool(
     } catch (error: any) {
       return {
         content: [{ type: "text", text: `Error: ${error.message}` }],
-      };
-    }
-  }
-);
-
-// Tool 5: JSON Filter - Filter arrays or objects by conditions
-server.tool(
-  "json_filter",
-  "Filter arrays/objects with JS conditions like 'item.age > 18'. Use for conditional data extraction.",
-  {
-    file_path: z.string().describe("Path to the JSON file"),
-    path: z.string().optional().describe("Dot notation path to the target array/object"),
-    condition: z.string().describe("JavaScript condition (e.g., 'item.age > 18', 'key.includes(\"test\")')"),
-  },
-  async ({ file_path, path, condition }) => {
-    try {
-      const data = readJSONFile(file_path);
-      const target = path ? getValueByPath(data, path) : data;
-      
-      const filtered = filterObject(target, condition);
-      
-      return {
-        content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Error: ${error.message}` }],
-      };
-    }
-  }
-);
-
-// Tool 6: JSON Search - Search for keys/values matching patterns
-server.tool(
-  "json_search",
-  "Find keys or values matching regex patterns. Use to locate specific data across the entire structure.",
-  {
-    file_path: z.string().describe("Path to the JSON file"),
-    search_type: z.enum(["key", "value", "both"]).describe("What to search for"),
-    pattern: z.string().describe("Search pattern (supports regex)"),
-    case_sensitive: z.boolean().optional().describe("Case sensitive search (default: false)"),
-    max_results: z.number().optional().describe("Maximum number of results (default: 100)"),
-  },
-  async ({ file_path, search_type, pattern, case_sensitive, max_results }) => {
-    try {
-      const data = readJSONFile(file_path);
-      const results: any[] = [];
-      const maxRes = max_results || 100;
-      const flags = case_sensitive ? 'g' : 'gi';
-      const regex = new RegExp(pattern, flags);
-      
-      function searchObject(obj: any, currentPath: string = ""): void {
-        if (results.length >= maxRes) return;
-        
-        if (Array.isArray(obj)) {
-          obj.forEach((item, index) => {
-            searchObject(item, `${currentPath}[${index}]`);
-          });
-        } else if (typeof obj === 'object' && obj !== null) {
-          Object.entries(obj).forEach(([key, value]) => {
-            const newPath = currentPath ? `${currentPath}.${key}` : key;
-            
-            if ((search_type === 'key' || search_type === 'both') && regex.test(key)) {
-              results.push({ type: 'key', path: newPath, key, value });
-            }
-            
-            if ((search_type === 'value' || search_type === 'both')) {
-              // Handle null values specially
-              if (value === null && pattern === 'null') {
-                results.push({ type: 'value', path: newPath, key, value });
-              } else if (typeof value === 'string' && regex.test(value)) {
-                results.push({ type: 'value', path: newPath, key, value });
-              } else if (typeof value === 'number' && regex.test(value.toString())) {
-                results.push({ type: 'value', path: newPath, key, value });
-              } else if (typeof value === 'boolean' && regex.test(value.toString())) {
-                results.push({ type: 'value', path: newPath, key, value });
-              }
-            }
-            
-            searchObject(value, newPath);
-          });
-        }
-      }
-      
-      searchObject(data);
-      
-      let markdown = `# Search Results\n\n`;
-      markdown += `**Pattern:** \`${pattern}\`\n`;
-      markdown += `**Matches Found:** ${results.length}\n`;
-      markdown += `**Search Type:** ${search_type}\n\n`;
-      
-      if (results.length > 0) {
-        markdown += `## Matches\n\n`;
-        results.slice(0, maxRes).forEach((match, idx) => {
-          markdown += `${idx + 1}. **${match.type}** at \`${match.path}\`\n`;
-          markdown += `   - Key: \`${match.key}\`\n`;
-          markdown += `   - Value: \`${JSON.stringify(match.value)}\`\n\n`;
-        });
-        
-        if (results.length > maxRes) {
-          markdown += `\n*...and ${results.length - maxRes} more results*\n`;
-        }
-      } else {
-        markdown += `*No matches found*\n`;
-      }
-      
-      return {
-        content: [{ type: "text", text: markdown }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Error: ${error.message}` }],
-      };
-    }
-  }
-);
-
-// Tool 7: JSON Transform - Apply transformations to JSON data
-server.tool(
-  "json_transform",
-  "Map, reduce, or sort arrays using JS expressions. Use for data transformation and aggregation.",
-  {
-    file_path: z.string().describe("Path to the JSON file"),
-    path: z.string().optional().describe("Dot notation path to the target"),
-    transform_type: z.enum(["map", "reduce", "sort"]).describe("Type of transformation"),
-    expression: z.string().describe("JavaScript expression for transformation"),
-  },
-  async ({ file_path, path, transform_type, expression }) => {
-    try {
-      const data = readJSONFile(file_path);
-      let target = path ? getValueByPath(data, path) : data;
-      
-      if (!Array.isArray(target)) {
-        if (transform_type === 'map' || transform_type === 'sort') {
-          throw new Error(`Transform target must be an array for ${transform_type} operations. Got ${typeof target}${typeof target === 'object' ? ' (object)' : ''}`);
-        }
-        // For reduce on objects, convert to entries array
-        if (transform_type === 'reduce' && typeof target === 'object' && target !== null) {
-          target = Object.entries(target);
-        }
-      }
-      
-      let result: any;
-      
-      switch (transform_type) {
-        case 'map':
-          const mapFn = new Function('item', 'index', 'array', `return ${expression}`);
-          result = target.map(mapFn);
-          break;
-        case 'reduce':
-          const reduceFn = new Function('acc', 'item', 'index', 'array', `return ${expression}`);
-          // For reduce, use 0 as initial value for numeric operations, empty object for object operations
-          const initialValue = expression.includes('+') || expression.includes('-') || expression.includes('*') || expression.includes('/') ? 0 : {};
-          result = Array.isArray(target) ? target.reduce(reduceFn as any, initialValue) : reduceFn(initialValue, target, 0, [target]);
-          break;
-        case 'sort':
-          const sortFn = new Function('a', 'b', `return ${expression}`);
-          result = [...target].sort(sortFn as any);
-          break;
-        default:
-          throw new Error(`Unknown transform type: ${transform_type}`);
-      }
-      
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ type: "text", text: `Error: ${error.message}` }],
-      };
-    }
-  }
-);
-
-// Tool 8: JSON Validate - Basic validation and structure checking
-server.tool(
-  "json_validate",
-  "Check for deep nesting, empty structures, and file validity. Use before processing unknown JSON.",
-  {
-    file_path: z.string().describe("Path to the JSON file"),
-    check_duplicates: z.boolean().optional().describe("Check for duplicate keys in objects"),
-    check_empty: z.boolean().optional().describe("Check for empty arrays/objects"),
-    max_depth_check: z.number().optional().describe("Warn if nesting exceeds this depth"),
-  },
-  async ({ file_path, check_duplicates, check_empty, max_depth_check }) => {
-    try {
-      const content = readFileSync(resolve(file_path), 'utf8');
-      const data = safeParseJSON(content, file_path);
-      
-      const issues: string[] = [];
-      let maxDepth = 0;
-      
-      function validateObject(obj: any, currentDepth: number = 0, currentPath: string = 'root'): void {
-        maxDepth = Math.max(maxDepth, currentDepth);
-        
-        if (max_depth_check && currentDepth > max_depth_check) {
-          issues.push(`Deep nesting detected at ${currentPath} (depth: ${currentDepth})`);
-        }
-        
-        if (Array.isArray(obj)) {
-          if (check_empty && obj.length === 0) {
-            issues.push(`Empty array at ${currentPath}`);
-          }
-          obj.forEach((item, index) => {
-            validateObject(item, currentDepth + 1, `${currentPath}[${index}]`);
-          });
-        } else if (typeof obj === 'object' && obj !== null) {
-          const keys = Object.keys(obj);
-          
-          if (check_empty && keys.length === 0) {
-            issues.push(`Empty object at ${currentPath}`);
-          }
-          
-          if (check_duplicates) {
-            const keySet = new Set(keys);
-            if (keySet.size !== keys.length) {
-              issues.push(`Potential duplicate keys detected at ${currentPath}`);
-            }
-          }
-          
-          keys.forEach(key => {
-            validateObject(obj[key], currentDepth + 1, `${currentPath}.${key}`);
-          });
-        }
-      }
-      
-      validateObject(data);
-      
-      const fileSize = (content.length / 1024).toFixed(2);
-      
-      let markdown = `# JSON Validation Report\n\n`;
-      markdown += `✓ **Valid JSON**\n\n`;
-      markdown += `**File Size:** ${fileSize} KB\n`;
-      markdown += `**Max Depth:** ${maxDepth}\n`;
-      markdown += `**Issues Found:** ${issues.length}\n\n`;
-      
-      if (issues.length > 0) {
-        markdown += `## Issues\n\n`;
-        issues.forEach((issue, idx) => {
-          markdown += `${idx + 1}. ${issue}\n`;
-        });
-      } else {
-        markdown += `✓ No issues found\n`;
-      }
-      
-      return {
-        content: [{ type: "text", text: markdown }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{ 
-          type: "text", 
-          text: `# JSON Validation Report\n\n✗ **Invalid JSON**\n\n**Error:** ${error.message}\n`
-        }],
       };
     }
   }
